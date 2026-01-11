@@ -113,7 +113,7 @@ jobs:
         chmod +x $DIY_P2_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
-         echo 'src-git qmodem https://github.com/yizhanghongFUjr/QModem.git;main' >> feeds.conf.default
+         echo 'src-git qmodem https://github.com/yizhanghong/QModem.git;main' >> feeds.conf.default
         ./scripts/feeds update qmodem
         ./scripts/feeds install -a -f -p qmodem
         #git clone -b v3.0.0 --depth=1 https://github.com/FUjr/QModem.git package/qmodem
