@@ -1,0 +1,243 @@
+##
+#
+# 感谢p3terx大神的一键编译脚本
+# 
+# https://github.com/P3TERX/Actions-OpenWrt
+# Description: Build OpenWrt using GitHub Actions
+#
+#修改以下代码或者开启触发开关都好，要严格按格式对好,前面有多少空格也要看清楚
+#代码里有 name: 后面的内容随便改,冒号后面是有个空格的,如果修改固件名字就要考虑能不能显示出你想要的
+
+name: airpi-ap3000m 固件
+
+#permissions: write-all
+#开启写权限，防止无法上传到release
+
+on: 
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      ssh:
+        description: 'SSH connection to Actions'
+        required: false
+        default: 'false'
+#  schedule:
+#   - cron: 0 20 * * 2
+   #   分,时,日,月,星期。每周 三 20时执行一次 (UTC时间)
+  
+env:
+  REPO_URL: https://github.com/benboguan/immortalwrt-mt798x-6.6
+  REPO_BRANCH: mt7988-6.6-mtwifi
+  FEEDS_CONF: feeds.conf.default
+  CONFIG_FILE: config/airpi_ap3000m_16g.config
+  DIY_P1_SH: script/diy-part24.10.sh
+  DIY_P2_SH: script/diy2-part24.10.sh
+  SSH_ACTIONS: false
+  UPLOAD_BIN_DIR: false
+  UPLOAD_FIRMWARE: true
+  UPLOAD_RELEASE: true
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    name: 编译OpenWrt-immortalwrt-mt798x固件
+    runs-on: ubuntu-24.04
+
+    steps:
+    - name: 可用磁盘空间清理 (Ubuntu)
+      uses: jlumbroso/free-disk-space@main
+      with:
+        # this might remove tools that are actually needed,
+        # if set to "true" but frees about 6 GB
+        tool-cache: true
+        
+        # all of these default to true, but feel free to set to
+        # "false" if necessary for your workflow
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        swap-storage: true
+        
+    - name: 准备
+      uses: actions/checkout@main
+      
+    - name: 检查磁盘空间
+      run: |
+           echo "Free space:"
+           df -h
+
+    - name: 开始安装编译所需系统
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo -E apt-get update
+        sudo -E apt-get -y install build-essential gawk gcc-multilib flex git gettext libncurses5-dev libssl-dev python3 python3-pip python3-ply python3-docutils python3-pyelftools zlib1g-dev
+        sudo -E apt-get -y autoremove
+        sudo -E apt-get autoclean
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+
+    - name: 下载固件源码
+      working-directory: /workdir
+      run: |
+        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+    - name: 加载Cache缓存
+      uses: klever1988/cachewrtbuild@main
+      with:
+        ccache: 'true'
+        mixkey: 'openwrt-24.10.3-6.6-mtwifi'
+        prefix: ${{ github.workspace }}/openwrt
+
+    - name: 加载feeds跟自定义插件
+      run: |
+        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
+        chmod +x $DIY_P1_SH
+        cd openwrt
+        $GITHUB_WORKSPACE/$DIY_P1_SH
+        
+    - name: 更新 & 安装 feeds
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: 加载.config设置
+      run: |
+        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+        cp -f patches/60_wifi.js openwrt/feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/60_wifi.js
+        [ -d patches/luci-24.10-patch ] && mv -f patches/luci-24.10-patch openwrt/feeds/luci/luci-24.10-patch
+        chmod +x $DIY_P2_SH
+        cd openwrt
+        $GITHUB_WORKSPACE/$DIY_P2_SH
+         echo 'src-git qmodem https://github.com/yizhanghong/QModem.git;main' >> feeds.conf.default
+        ./scripts/feeds update qmodem
+        ./scripts/feeds install -a -f -p qmodem
+        #git clone -b v3.0.0 --depth=1 https://github.com/FUjr/QModem.git package/qmodem
+        sed -i "s/CONFIG_PACKAGE_sms-tool/#CONFIG_PACKAGE_sms-tool/g" .config  
+        sed -i "s/CONFIG_PACKAGE_luci-app-modem/#CONFIG_PACKAGE_luci-app-modem/g" .config  
+        sed -i "s/CONFIG_PACKAGE_luci-app-sms-tool/#CONFIG_PACKAGE_luci-app-sms-tool/g" .config
+        echo "
+        CONFIG_PACKAGE_luci-i18n-qmodem-zh-cn=y
+        #CONFIG_PACKAGE_luci-i18n-qmodem-hc-zh-cn=y
+        CONFIG_PACKAGE_luci-i18n-qmodem-mwan-zh-cn=y
+        # CONFIG_PACKAGE_luci-i18n-qmodem-ru is not set
+        CONFIG_PACKAGE_luci-i18n-qmodem-sms-zh-cn=y
+        CONFIG_PACKAGE_luci-app-qmodem=y
+        CONFIG_PACKAGE_luci-app-modem=n
+        CONFIG_PACKAGE_luci-app-qmodem_INCLUDE_vendor-qmi-wwan=y
+        # CONFIG_PACKAGE_luci-app-qmodem_INCLUDE_generic-qmi-wwan is not set
+        CONFIG_PACKAGE_luci-app-qmodem_USE_TOM_CUSTOMIZED_QUECTEL_CM=y
+        # CONFIG_PACKAGE_luci-app-qmodem_USING_QWRT_QUECTEL_CM_5G is not set
+        # CONFIG_PACKAGE_luci-app-qmodem_USING_NORMAL_QUECTEL_CM is not set
+        CONFIG_PACKAGE_luci-app-qmodem_INCLUDE_ADD_PCI_SUPPORT=y
+        # CONFIG_PACKAGE_luci-app-qmodem_INCLUDE_ADD_QFIREHOSE_SUPPORT is not set
+        #CONFIG_PACKAGE_luci-app-qmodem-hc=y
+        CONFIG_PACKAGE_luci-app-qmodem-mwan=y
+        CONFIG_PACKAGE_luci-app-qmodem-sms=y
+        #CONFIG_PACKAGE_luci-app-qmodem-ttl=y
+        CONFIG_PACKAGE_qmodem=y
+        CONFIG_PACKAGE_quectel-CM-5G=y
+        CONFIG_PACKAGE_quectel-CM-5G-M=y
+        " >> .config
+
+    - name: SSH远程连接服务器配置固件
+      uses: P3TERX/ssh2actions@v1.0.0
+      if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh  != 'false') || contains(github.event.action, 'ssh')
+      env:
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+
+    - name: 下载软件包
+      id: package
+      run: |
+        cd openwrt
+        make defconfig
+        make download -j8 V=11
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: 开始编译固件
+      id: compile
+      run: |
+        cd openwrt
+        echo -e "$(($(nproc)+1)) thread compile"
+        make -j$(($(nproc)+1)) || make -j$(nproc) || make -j1 V=s
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: 检查github储存空间情况
+      if: (!cancelled())
+      run: df -hT
+
+    - name: 上传bin文件夹(固件+ipk)在github空间
+      uses: actions/upload-artifact@main
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      with:
+        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: openwrt/bin
+
+    - name: 整理固件文件夹
+      id: organize
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        cd openwrt/bin/targets/*/*
+        # rm -rf *.buildinfo
+        rm -rf *.json
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+        
+    - name: 上传.config配置文件在github空间    
+      if: steps.organizer.outputs.status == 'success' && env.UPLOAD_CONFIG == 'true'
+      uses: actions/upload-artifact@main
+      with:
+        name: config.buildinfo_${{ env.FILE_DATE }}
+        path: ./config    
+
+    - name: 上传固件在github空间
+      uses: actions/upload-artifact@main
+      if: env.UPLOAD_FIRMWARE == 'true' && steps.organize.outputs.status == 'success' && !cancelled()
+      with:
+        name: hiveton-h5000m-immortalwrt-mt798x固件
+        path: ${{ env.FIRMWARE }}
+
+    - name: 创建 release tag
+      id: tag
+      if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success' && !cancelled()
+      run: |
+        echo -e "✅ immortalwrt-mt798x 源码版本，256M运存建议时常重启一次，不然容易出现爆运存导致卡网" >> release.txt
+        echo "release_tag=$(date +"%Y.%m.%d-%H%M")-hiveton-h5000m">> $GITHUB_OUTPUT
+        touch release.txt
+        echo "hiveton-h5000m" >> release.txt
+        echo "📥 固件下载" >> release.txt
+        echo "status=success" >>$GITHUB_OUTPUT
+
+    - name: 上传固件到release
+      uses: softprops/action-gh-release@master
+      if: steps.tag.outputs.status == 'success' && !cancelled()
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.tag.outputs.release_tag }}
+        body_path: release.txt
+        files: ${{ env.FIRMWARE }}/*
+
+    - name: 删除旧发布的固件
+      uses: dev-drprasad/delete-older-releases@master
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true' && !cancelled()
+      with:
+        keep_latest: 7
+        delete_tags: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 删除过时工作流程
+      uses: Mattraks/delete-workflow-runs@main
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        repository: ${{ github.repository }}
+        retain_days: 1
+        keep_minimum_runs: 3
