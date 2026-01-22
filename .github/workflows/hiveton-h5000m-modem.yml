@@ -116,7 +116,7 @@ jobs:
 
         # 添加modem
         rm -rf ./package/mtk/applications/5g-modem/luci-app-modem/root/usr/share/modem/modem_support.json
-        cp -f ../config/modem_support.json ./package/mtk/applications/5g-modem/luci-app-modem/root/usr/share/modem/modem_support.json
+        cp -f $GITHUB_WORKSPACE/config/modem_support.json ./package/mtk/applications/5g-modem/luci-app-modem/root/usr/share/modem/modem_support.json
         chmod +x ./package/mtk/applications/5g-modem/luci-app-modem/root/usr/share/modem/modem_support.json
 
         echo "
